@@ -335,8 +335,11 @@
     <!-- Mode slider -->
     <div id="zone-slider">
       <input type="range" id="slider-throttle"
-             min="0" max="100" value="0"
+             min="0" max="100" value="0" disabled
              oninput="envoyerThrottle(parseInt(this.value))">
+      <p id="msg-attente-arm" style="color:#e65100;font-size:0.85em;margin:4px 0 0;">
+        ⏳ En attente de l'armement (LED verte)…
+      </p>
     </div>
 
     <!-- Mode NippleJS -->
@@ -436,8 +439,17 @@ function setUI(connecte) {
   document.getElementById('dot').className          = connecte ? 'connecte' : '';
   document.getElementById('txt-statut').textContent = connecte ? 'Connecté' : 'Déconnecté';
   document.getElementById('btn-connect').disabled   = connecte;
-  document.getElementById('section-wizard').style.display  = connecte ? '' : 'none';
-  document.getElementById('section-controle').style.display = (connecte && escState === 4) ? '' : 'none';
+  document.getElementById('section-wizard').style.display   = connecte ? '' : 'none';
+  document.getElementById('section-controle').style.display = connecte ? '' : 'none';
+  actualiserCurseur();
+}
+
+function actualiserCurseur() {
+  const arme = escState === 4;
+  const slider = document.getElementById('slider-throttle');
+  slider.disabled = !arme;
+  slider.style.opacity = arme ? '1' : '0.35';
+  document.getElementById('msg-attente-arm').style.display = arme ? 'none' : '';
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -447,8 +459,7 @@ function onStatusChange(evt) {
   escState = evt.target.value.getUint8(0);
   mettreAJourEtapes(escState);
 
-  const afficherControle = escState === 4;
-  document.getElementById('section-controle').style.display = afficherControle ? '' : 'none';
+  actualiserCurseur();
 
   // Synchroniser l'affichage du slider de pré-armement selon l'état
   if (escState === 1) {
