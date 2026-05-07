@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaz — Aéroglisseur BLE</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: #f0f4f8;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    gap: 28px;
+  }
+
+  h1 {
+    font-size: 1.3em;
+    color: #1565c0;
+    letter-spacing: .03em;
+  }
+
+  /* ── Connexion ─────────────────────────────────────── */
+  #zone-connexion {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #e53935;
+    transition: background .3s;
+    flex-shrink: 0;
+  }
+  .dot.ok { background: #43a047; }
+
+  #statut { color: #555; font-size: .9em; }
+
+  button {
+    padding: 10px 22px;
+    border: none;
+    border-radius: 8px;
+    font-size: .95em;
+    cursor: pointer;
+    transition: background .2s, opacity .2s;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  #btn-connect { background: #1565c0; color: white; }
+  #btn-connect:hover:not(:disabled) { background: #0d47a1; }
+
+  /* ── Carte centrale ────────────────────────────────── */
+  #carte {
+    background: white;
+    border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.1);
+    padding: 32px 40px;
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+    opacity: .4;
+    pointer-events: none;
+    transition: opacity .4s;
+  }
+  #carte.actif { opacity: 1; pointer-events: auto; }
+
+  /* ── Valeur ────────────────────────────────────────── */
+  #valeur {
+    font-size: 3.5em;
+    font-weight: 700;
+    color: #1565c0;
+    line-height: 1;
+  }
+  #valeur span { font-size: .45em; color: #888; font-weight: 400; }
+
+  /* ── Slider ────────────────────────────────────────── */
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(to right, #1565c0 var(--pct, 0%), #ddd var(--pct, 0%));
+    outline: none;
+    cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: #1565c0;
+    box-shadow: 0 2px 6px rgba(0,0,0,.25);
+    cursor: pointer;
+    transition: transform .1s;
+  }
+  input[type=range]::-webkit-slider-thumb:active { transform: scale(1.15); }
+
+  /* ── Arrêt d'urgence ───────────────────────────────── */
+  #btn-stop {
+    width: 100%;
+    background: #c62828;
+    color: white;
+    font-size: 1em;
+    font-weight: 600;
+    padding: 13px;
+    border-radius: 10px;
+    letter-spacing: .04em;
+  }
+  #btn-stop:hover:not(:disabled) { background: #b71c1c; }
+
+  /* ── Message erreur ────────────────────────────────── */
+  #erreur {
+    color: #c62828;
+    font-size: .85em;
+    text-align: center;
+    max-width: 380px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<h1>🌬 Aéroglisseur — Commande des gaz</h1>
+
+<div id="zone-connexion">
+  <div class="dot" id="dot"></div>
+  <span id="statut">Déconnecté</span>
+  <button id="btn-connect" onclick="connecter()">Connecter</button>
+</div>
+
+<p id="erreur"></p>
+
+<div id="carte">
+  <div id="valeur">0 <span>%</span></div>
+  <input type="range" id="slider" min="0" max="100" value="0"
+         oninput="majGaz(this.value)">
+  <button id="btn-stop" onclick="arretUrgence()">⛔ ARRÊT D'URGENCE</button>
+</div>
+
+<script>
+// ── UUIDs — modifier ici ET dans le firmware ──────────────
+const SERVICE_UUID  = "a2b3c4d5-0001-4abc-8def-123456789abc";
+const THROTTLE_UUID = "a2b3c4d5-0002-4abc-8def-123456789abc";
+
+// ── Variables ─────────────────────────────────────────────
+let throttleChar = null;
+let dernierEnvoi = 0;
+const INTERVALLE = 50; // ms
+
+// ── Connexion ─────────────────────────────────────────────
+async function connecter() {
+  const btnC = document.getElementById('btn-connect');
+  btnC.disabled = true;
+
+  if (!navigator.bluetooth) {
+    afficherErreur('Web Bluetooth non disponible.\n→ Utiliser Chrome ou Edge en HTTPS.');
+    btnC.disabled = false;
+    return;
+  }
+
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SERVICE_UUID]
+    });
+
+    device.addEventListener('gattserverdisconnected', deconnecter);
+
+    const server  = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    throttleChar  = await service.getCharacteristic(THROTTLE_UUID);
+
+    document.getElementById('dot').classList.add('ok');
+    document.getElementById('statut').textContent = 'Connecté — ' + device.name;
+    document.getElementById('carte').classList.add('actif');
+    document.getElementById('erreur').style.display = 'none';
+    btnC.disabled = true;
+
+  } catch (err) {
+    afficherErreur(err.message);
+    btnC.disabled = false;
+  }
+}
+
+function deconnecter() {
+  throttleChar = null;
+  document.getElementById('dot').classList.remove('ok');
+  document.getElementById('statut').textContent = 'Déconnecté';
+  document.getElementById('carte').classList.remove('actif');
+  document.getElementById('btn-connect').disabled = false;
+  resetSlider();
+}
+
+// ── Commande gaz ──────────────────────────────────────────
+async function majGaz(val) {
+  val = parseInt(val);
+  document.getElementById('valeur').innerHTML = val + ' <span>%</span>';
+  document.getElementById('slider').style.setProperty('--pct', val + '%');
+
+  const maintenant = Date.now();
+  if (!throttleChar || maintenant - dernierEnvoi < INTERVALLE) return;
+  dernierEnvoi = maintenant;
+  try {
+    await throttleChar.writeValue(new Uint8Array([val]));
+  } catch(e) { console.error(e); }
+}
+
+async function arretUrgence() {
+  resetSlider();
+  if (!throttleChar) return;
+  try { await throttleChar.writeValue(new Uint8Array([0])); } catch(e) {}
+}
+
+function resetSlider() {
+  const s = document.getElementById('slider');
+  s.value = 0;
+  s.style.setProperty('--pct', '0%');
+  document.getElementById('valeur').innerHTML = '0 <span>%</span>';
+}
+
+// ── Erreur ────────────────────────────────────────────────
+function afficherErreur(msg) {
+  const el = document.getElementById('erreur');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+</script>
+</body>
+</html>
